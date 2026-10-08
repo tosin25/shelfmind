@@ -135,12 +135,18 @@ export default function Home() {
             Upload your can. Add competitors. See your rank, your gaps, and
             what to change.
           </p>
-          <div>
+          <div className="flex gap-3 justify-center">
             <a
               href="/upload"
               className="inline-block bg-white text-black px-8 py-3 rounded-full font-medium hover:bg-zinc-200 transition"
             >
               Rank my can
+            </a>
+            <a
+              href="/history"
+              className="inline-block border border-zinc-800 text-white px-8 py-3 rounded-full font-medium hover:border-zinc-600 transition"
+            >
+              History
             </a>
           </div>
         </div>
@@ -179,12 +185,28 @@ export default function Home() {
             <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-black/70 via-black/20 to-transparent pointer-events-none" />
           </div>
 
-          {/* Top wordmark */}
+          {/* Top bar */}
           <div
-            className="absolute top-8 left-1/2 -translate-x-1/2 text-xs uppercase tracking-widest text-white/70 transition-opacity duration-500"
+            className="absolute top-8 left-8 right-8 flex justify-between items-center transition-opacity duration-500"
             style={{ opacity: 1 - progress * 0.6 }}
           >
-            ShelfMind
+            <div className="text-xs uppercase tracking-widest text-white/70">
+              ShelfMind
+            </div>
+            <div className="flex items-center gap-6">
+              <a
+                href="/gallery"
+                className="text-xs uppercase tracking-widest text-white/50 hover:text-white transition"
+              >
+                Gallery
+              </a>
+              <a
+                href="/history"
+                className="text-xs uppercase tracking-widest text-white/50 hover:text-white transition"
+              >
+                History
+              </a>
+            </div>
           </div>
 
           {/* Headline — bottom of viewport, not inside the frame */}

@@ -84,3 +84,11 @@ export function avgScore(s: CompetitorScore): number {
       8
   );
 }
+
+export const CATEGORY_COMPETITORS: Record<string, string[]> = {
+  functional_soda: ["Olipop", "Poppi", "Culture Pop", "Zevia", "Spindrift", "Sanzo"],
+  energy: ["Red Bull", "Monster", "Celsius", "Alani Nu", "Ghost", "C4"],
+  sparkling_water: ["LaCroix", "Spindrift", "Waterloo", "Bubly", "Aura Bora", "Sanzo"],
+  coffee: ["Stumptown", "La Colombe", "Chamberlain", "Cometeer", "Wandering Bear", "Grady's"],
+  juice: ["Tropicana", "Simply", "Natalie's", "Evolution", "Suja", "Uncle Matt's"],
+};

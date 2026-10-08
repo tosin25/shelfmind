@@ -82,10 +82,21 @@ export default function Upload() {
 
   function submit() {
     if (!canSubmit || !yourCan) return;
+    // Generate a session ID once per browser
+    let sessionId = localStorage.getItem("shelfmind_sid");
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem("shelfmind_sid", sessionId);
+    }
     sessionStorage.removeItem("shelfmind_report");
     sessionStorage.setItem(
       "shelfmind_pending",
-      JSON.stringify({ image: yourCan, category, competitors: picked })
+      JSON.stringify({
+        image: yourCan,
+        category,
+        competitors: picked,
+        session_id: sessionId,
+      })
     );
     router.push("/report");
   }
@@ -95,9 +106,14 @@ export default function Upload() {
   return (
     <main className="min-h-screen bg-black text-white p-8 md:p-16">
       <div className="max-w-3xl mx-auto">
-        <a href="/" className="text-zinc-500 text-sm hover:text-white">
-          ← ShelfMind
-        </a>
+        <div className="flex justify-between items-center">
+          <a href="/" className="text-zinc-500 text-sm hover:text-white">
+            ← ShelfMind
+          </a>
+          <a href="/gallery" className="text-zinc-500 text-sm hover:text-white">
+            Gallery →
+          </a>
+        </div>
 
         <h1 className="text-4xl md:text-5xl font-bold tracking-tight mt-10 mb-3">
           Rank your can.

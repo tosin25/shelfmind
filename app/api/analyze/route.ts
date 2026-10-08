@@ -1,6 +1,8 @@
+
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { COMPETITOR_SCORES, COMPETITOR_DOMAINS, avgScore } from "@/lib/competitor-scores";
+import { supabaseAdmin } from "@/lib/supabase";
 
 const client = new OpenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -304,8 +306,26 @@ Return JSON.`,
       },
       recommended_tests: tests,
     };
+    // Save to Supabase
+    const sessionId = (form.get("session_id") as string) || "anonymous";
+    const { data: saved, error: saveError } = await supabaseAdmin
+      .from("analyses")
+      .insert({
+        session_id: sessionId,
+        category,
+        image_url: `data:${yourCan.type || "image/jpeg"};base64,${buf.toString("base64")}`,
+        report: response,
+      })
+      .select("id")
+      .single();
 
-    return NextResponse.json(response);
+    if (saveError) {
+      console.error("SUPABASE SAVE ERROR:", saveError);
+      // Still return the report even if save fails
+      return NextResponse.json({ ...response, id: null });
+    }
+
+    return NextResponse.json({ ...response, id: saved.id });
   } catch (e: any) {
     console.error("ANALYZE ERROR:", e);
     return NextResponse.json({ error: e.message || "Analysis failed" }, { status: 500 });
