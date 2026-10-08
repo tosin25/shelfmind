@@ -289,6 +289,7 @@ export default function Report() {
 
   // ---- LOADING ----
   if (status === "pending") {
+    const pct = Math.min(100, Math.round(((stepIndex + 1) / STEPS.length) * 100));
     return (
       <main className="min-h-screen bg-black text-white p-6 md:p-16">
         <style>{`
@@ -301,7 +302,23 @@ export default function Report() {
           .scanline { animation: scan 1.4s ease-in-out infinite; }
         `}</style>
         <div className="max-w-5xl mx-auto">
-          <div className="text-xs text-zinc-500 uppercase tracking-widest mb-3">Analyzing</div>
+          <div className="flex justify-between items-baseline mb-4">
+            <div className="text-xs text-zinc-500 uppercase tracking-widest">
+              Analyzing
+            </div>
+            <div className="text-xs font-mono text-zinc-500 tabular-nums">
+              {pct}%
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1 bg-zinc-900 rounded-full overflow-hidden mb-12">
+            <div
+              className="h-full bg-emerald-400 transition-all duration-700 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+
           <div className="grid md:grid-cols-[280px_1fr] gap-10 items-start mb-12">
             <div className="relative rounded-2xl overflow-hidden border border-zinc-900 bg-zinc-950">
               {pendingImage && <img src={pendingImage} alt="your can" className="w-full" />}
