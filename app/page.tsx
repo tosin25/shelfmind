@@ -1,176 +1,240 @@
+"use client";
+import { useEffect, useRef, useState } from "react";
+
+const FRAME_COUNT = 160;
+
+const FRAME_PATH = (i: number) =>
+  `/peel/frame-${String(i + 1).padStart(3, "0")}.jpg`;
+
 export default function Home() {
-  return (
-    <main className="min-h-screen bg-black text-white">
-      {/* HERO */}
-      <section className="min-h-screen flex flex-col justify-between p-8 md:p-16 max-w-6xl mx-auto">
-        <header className="flex justify-between items-center">
-          <div className="text-sm font-semibold tracking-tight">ShelfMind</div>
-          <a
-            href="/upload"
-            className="text-sm text-zinc-500 hover:text-white transition"
-          >
-            Try it →
-          </a>
-        </header>
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const framesRef = useRef<HTMLImageElement[]>([]);
+  const frameIdxRef = useRef(0);
+  const rafRef = useRef(0);
+  const targetIdxRef = useRef(0);
 
-        <div className="max-w-3xl">
-          <p className="text-xs text-zinc-500 uppercase tracking-widest mb-6">
-            Packaging intelligence for beverage founders
-          </p>
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tight leading-[0.95] mb-8">
-            See how your can ranks against your category.
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  // Preload all frames
+  useEffect(() => {
+    let cancelled = false;
+    const loaded: HTMLImageElement[] = [];
+    let count = 0;
+    let errors = 0;
+
+    for (let i = 0; i < FRAME_COUNT; i++) {
+      const img = new Image();
+      img.src = FRAME_PATH(i);
+      const check = () => {
+        if (cancelled) return;
+        if (count + errors === FRAME_COUNT) {
+          if (errors > FRAME_COUNT / 2) {
+            setFailed(true);
+          } else {
+            framesRef.current = loaded;
+            setReady(true);
+          }
+        }
+      };
+      img.onload = () => {
+        count++;
+        check();
+      };
+      img.onerror = () => {
+        errors++;
+        check();
+      };
+      loaded[i] = img;
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const draw = () => {
+    const canvas = canvasRef.current;
+    const idx = Math.round(frameIdxRef.current);
+    const img = framesRef.current[idx];
+    if (!canvas || !img || !img.complete) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    // Canvas matches the frame aspect by construction — fill it completely.
+    ctx.drawImage(img, 0, 0, w, h);
+  };
+
+  useEffect(() => {
+    if (!ready) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    function onScroll() {
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const total = rect.height - window.innerHeight;
+      const p = Math.min(1, Math.max(0, -rect.top / (total || 1)));
+      setProgress(p);
+      targetIdxRef.current = Math.min(
+        FRAME_COUNT - 1,
+        Math.floor(p * FRAME_COUNT)
+      );
+    }
+
+    function tick() {
+      const current = frameIdxRef.current;
+      const target = targetIdxRef.current;
+      const delta = target - current;
+      if (Math.abs(delta) > 0.3) {
+        frameIdxRef.current = current + delta * 0.25;
+        draw();
+      } else if (current !== target) {
+        frameIdxRef.current = target;
+        draw();
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    }
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", draw);
+    onScroll();
+    draw();
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", draw);
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [ready]);
+
+  if (failed) {
+    return (
+      <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-8">
+        <div className="max-w-2xl text-center flex flex-col gap-6">
+          <div className="text-xs text-zinc-500 uppercase tracking-widest">
+            ShelfMind
+          </div>
+          <h1 className="text-5xl md:text-6xl font-bold tracking-tight leading-tight">
+            Know where your can stands. Before you print.
           </h1>
-          <p className="text-xl text-zinc-400 leading-relaxed mb-10 max-w-2xl">
-            Upload your packaging. Add your top competitors. In 60 seconds
-            you&apos;ll see where you rank, why you&apos;re there, and what to
-            change to climb.
+          <p className="text-zinc-400 text-lg">
+            Upload your can. Add competitors. See your rank, your gaps, and
+            what to change.
           </p>
-          <a
-            href="/upload"
-            className="inline-block bg-white text-black px-8 py-4 rounded-full font-medium hover:bg-zinc-200 transition"
+          <div>
+            <a
+              href="/upload"
+              className="inline-block bg-white text-black px-8 py-3 rounded-full font-medium hover:bg-zinc-200 transition"
+            >
+              Rank my can
+            </a>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!ready) {
+    return (
+      <main className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-xs text-zinc-600 uppercase tracking-widest">
+          ShelfMind
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="bg-black text-white">
+      <div ref={containerRef} className="h-[300vh] relative">
+        <div className="sticky top-0 h-screen overflow-hidden flex items-center justify-center">
+          {/* Rounded frame around the can */}
+          <div
+            className="relative rounded-2xl overflow-hidden bg-black ring-1 ring-zinc-900 shadow-[0_0_60px_-15px_rgba(255,255,255,0.08)]"
+            style={{
+              aspectRatio: "400 / 711",
+              height: "78vh",
+              maxWidth: "90vw",
+            }}
           >
-            Rank my packaging
-          </a>
-        </div>
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full"
+            />
+            {/* Subtle bottom shading inside the frame for depth */}
+            <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-black/70 via-black/20 to-transparent pointer-events-none" />
+          </div>
 
-        <div className="text-xs text-zinc-600">
-          Built for DTC beverage founders. Functional soda, energy, sparkling
-          water, coffee, juice.
-        </div>
-      </section>
+          {/* Top wordmark */}
+          <div
+            className="absolute top-8 left-1/2 -translate-x-1/2 text-xs uppercase tracking-widest text-white/70 transition-opacity duration-500"
+            style={{ opacity: 1 - progress * 0.6 }}
+          >
+            ShelfMind
+          </div>
 
-      {/* PROBLEM — founder voice */}
+          {/* Headline — bottom of viewport, not inside the frame */}
+          <div
+            className="absolute bottom-20 left-8 right-8 md:left-16 md:right-16 max-w-2xl transition-opacity duration-300"
+            style={{ opacity: Math.max(0, (progress - 0.3) * 2) }}
+          >
+            <h1 className="text-4xl md:text-6xl font-bold tracking-tight leading-[0.95] mb-6">
+              Know where your can stands.
+              <br />
+              Before you print.
+            </h1>
+            <a
+              href="/upload"
+              className="inline-block bg-white text-black px-8 py-4 rounded-full font-medium hover:bg-zinc-200 transition"
+            >
+              Rank my can
+            </a>
+          </div>
+
+          {/* Scroll hint */}
+          <div
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-widest text-white/40"
+            style={{ opacity: Math.max(0, 1 - progress * 3) }}
+          >
+            scroll
+          </div>
+        </div>
+      </div>
+
       <section className="py-32 px-8 md:px-16 max-w-4xl mx-auto">
-        <div className="space-y-6 text-2xl md:text-4xl font-medium tracking-tight leading-tight">
-          <p className="text-zinc-700">
-            You just got the can back from the designer.
-          </p>
-          <p className="text-zinc-700">
-            It looks good on your screen.
-          </p>
-          <p className="text-white">
-            Now put it next to Olipop, Poppi, and Culture Pop on a shelf. Does
-            it still hold up?
-          </p>
-        </div>
-      </section>
-
-      {/* WHAT YOU GET — the leaderboard promise */}
-      <section className="py-32 px-8 md:px-16 max-w-6xl mx-auto">
-        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-12">
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-6">
           What you get
         </div>
-        <div className="grid md:grid-cols-2 gap-12">
-          <div>
-            <div className="text-5xl font-bold mb-4 text-zinc-800">01</div>
-            <h3 className="text-xl font-semibold mb-3">
-              Your rank against your category
-            </h3>
-            <p className="text-zinc-400">
-              Your can scored against 5 competitors you pick. You see exactly
-              where you land — and why.
-            </p>
-          </div>
-          <div>
-            <div className="text-5xl font-bold mb-4 text-zinc-800">02</div>
-            <h3 className="text-xl font-semibold mb-3">
-              Eight clarity scores, side by side
-            </h3>
-            <p className="text-zinc-400">
-              Brand, category, flavor, benefit, shelf, digital, differentiation,
-              SKU confusion. Yours vs. the leader.
-            </p>
-          </div>
-          <div>
-            <div className="text-5xl font-bold mb-4 text-zinc-800">03</div>
-            <h3 className="text-xl font-semibold mb-3">
-              The exact crops causing the gap
-            </h3>
-            <p className="text-zinc-400">
-              Not generic advice. The region of your can that&apos;s losing to
-              the winner&apos;s — shown side by side.
-            </p>
-          </div>
-          <div>
-            <div className="text-5xl font-bold mb-4 text-zinc-800">04</div>
-            <h3 className="text-xl font-semibold mb-3">
-              What to change to climb
-            </h3>
-            <p className="text-zinc-400">
-              Three concrete changes. Enough to brief your designer with. Before
-              you print.
-            </p>
-          </div>
+        <div className="space-y-6 text-2xl md:text-3xl font-medium tracking-tight leading-tight">
+          <p className="text-zinc-500">Your rank against 5 competitors.</p>
+          <p className="text-zinc-500">Eight clarity scores side by side.</p>
+          <p className="text-zinc-500">The crops causing the gap.</p>
+          <p className="text-white">Three tests to run before you print.</p>
         </div>
       </section>
 
-      {/* PROOF — the leaderboard mock */}
-      <section className="py-32 px-8 md:px-16 max-w-3xl mx-auto">
-        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-8">
-          Example
-        </div>
-        <div className="border border-zinc-900 rounded-3xl p-8 bg-zinc-950">
-          <div className="text-xs text-zinc-500 uppercase tracking-widest mb-6">
-            Functional soda · 6 cans
-          </div>
-          <div className="space-y-4">
-            {[
-              ["Olipop", 84],
-              ["Poppi", 81],
-              ["Culture Pop", 76],
-              ["Your can", 71, true],
-              ["Zevia", 68],
-              ["Spindrift", 62],
-            ].map(([name, score, you]: any, i) => (
-              <div
-                key={name}
-                className={`flex items-center gap-4 ${
-                  you ? "text-white" : "text-zinc-500"
-                }`}
-              >
-                <div className="w-6 text-sm font-mono">{i + 1}</div>
-                <div className="flex-1 font-medium">
-                  {name}
-                  {you && (
-                    <span className="ml-3 text-xs uppercase tracking-widest text-emerald-400">
-                      You
-                    </span>
-                  )}
-                </div>
-                <div className="w-32 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full ${
-                      you ? "bg-emerald-500" : "bg-zinc-700"
-                    }`}
-                    style={{ width: `${score}%` }}
-                  />
-                </div>
-                <div className="w-8 text-right font-mono text-sm">{score}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <section className="py-32 px-8 md:px-16 text-center">
+        <a
+          href="/upload"
+          className="inline-block bg-white text-black px-10 py-4 rounded-full font-medium hover:bg-zinc-200 transition"
+        >
+          Rank my can
+        </a>
       </section>
-
-      {/* CTA */}
-      <section className="py-32 px-8 md:px-16">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-8">
-            Know where you stand. Before you print.
-          </h2>
-          <a
-            href="/upload"
-            className="inline-block bg-white text-black px-10 py-4 rounded-full font-medium hover:bg-zinc-200 transition"
-          >
-            Rank my packaging
-          </a>
-        </div>
-      </section>
-
-      <footer className="border-t border-zinc-900 p-8 md:p-16 text-sm text-zinc-600 flex justify-between max-w-6xl mx-auto w-full">
-        <div>ShelfMind</div>
-        <div>Built by Tosin</div>
-      </footer>
     </main>
   );
 }

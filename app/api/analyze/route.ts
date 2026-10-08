@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { COMPETITOR_SCORES, COMPETITOR_DOMAINS, avgScore } from "@/lib/competitor-scores";
 
 const client = new OpenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -7,178 +8,306 @@ const client = new OpenAI({
   maxRetries: 0,
 });
 
-const SYSTEM = `You are ShelfMind, a beverage DTC packaging intelligence system.
+const SYSTEM = `You are ShelfMind. Score the user's beverage can against pre-computed competitors.
 
-You are NOT a design critic. You are a retail/product diagnostician.
+Return ONLY valid JSON. No markdown.
 
-Return ONLY valid JSON. No markdown. No prose. No code fences.
-Every key must be present. Every score must be a number 0-100.
+Rules:
+- Headline: 6-10 words, about the user's can.
+- Issues: max 12 words each.
+- Gaps: max 12 words each.
+- Tests: max 10 words each.
+- No notes. Scores only.
 
-For each top issue, you MUST provide a "region" — the rectangular area of the image
-that the issue refers to. Regions are in percentage from the top-left of the image:
-[x, y, width, height], each between 0 and 100.
+REGIONS — VERY IMPORTANT:
+Every top issue MUST include a "region": [x, y, width, height] in percentages
+(0-100) from the top-left of the USER's image. The region must point to the
+specific part of their can that the issue refers to.
 
-Example: a small flavor name in the top-right would be [60, 10, 30, 20].
+Examples:
+- Issue about the flavor name in the top-right: region [55, 8, 40, 20]
+- Issue about the brand mark in the center:    region [25, 30, 50, 25]
+- Issue about the back label:                  region [10, 60, 80, 30]
 
-Exact JSON shape (do not rename keys):
+NEVER use [0, 0, 100, 100]. Always point to a specific area.
+
+Exact JSON shape:
 {
-  "first_impression": {
-    "summary": "string",
-    "attention_order": ["string", "string", "string"]
+  "user_scores": {
+    "brand_recognition": 0,
+    "category_clarity": 0,
+    "flavor_clarity": 0,
+    "benefit_clarity": 0,
+    "shelf_visibility": 0,
+    "digital_shelf_readability": 0,
+    "differentiation": 0,
+    "sku_confusion_risk": 0
   },
-  "brand_recognition": { "score": 0, "notes": "string" },
-  "category_clarity": { "score": 0, "notes": "string" },
-  "flavor_clarity": { "score": 0, "notes": "string" },
-  "benefit_clarity": { "score": 0, "notes": "string" },
-  "shelf_visibility": { "score": 0, "notes": "string" },
-  "digital_shelf_readability": { "score": 0, "notes": "string" },
-  "differentiation": { "score": 0, "notes": "string" },
-  "sku_confusion_risk": { "score": 0, "notes": "string" },
+  "headline": "string",
   "top_issues": [
     { "issue": "string", "region": [0, 0, 0, 0] },
     { "issue": "string", "region": [0, 0, 0, 0] },
     { "issue": "string", "region": [0, 0, 0, 0] }
   ],
-  "competitor_reference": {
-    "brand": "string (a real competitor in this category)",
-    "what_they_do_differently": "string",
-    "what_to_copy": "string"
-  },
+  "gaps_vs_leader": ["string", "string", "string"],
   "recommended_tests": ["string", "string", "string"]
 }`;
 
 const MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.5-flash",
+  "gemini-2.5-flash-lite",
   "gemini-3.1-flash-lite",
-  "gemini-2.5-flash",
+  "gemini-3.5-flash",
 ];
 
-async function callWithRetry(messages: any[], modelIndex = 0, attempt = 0): Promise<string> {
-  const model = MODELS[modelIndex];
-  const maxAttemptsPerModel = 3;
+async function callModel(model: string, messages: any[]): Promise<string> {
+  const res = await client.chat.completions.create({
+    model,
+    messages,
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+    max_tokens: 1400,
+  } as any);
+  return res.choices[0].message.content || "{}";
+}
 
-  try {
-    const res = await client.chat.completions.create({
-      model,
-      messages,
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-    });
-    return res.choices[0].message.content || "{}";
-  } catch (e: any) {
-    const status = e?.status || e?.response?.status;
-    const retryable = status === 503 || status === 429 || status >= 500;
-
-    if (retryable && attempt < maxAttemptsPerModel - 1) {
-      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-      await new Promise((r) => setTimeout(r, delay));
-      return callWithRetry(messages, modelIndex, attempt + 1);
+async function callWithFallback(messages: any[]): Promise<string> {
+  let lastErr: any = null;
+  for (let i = 0; i < MODELS.length; i++) {
+    try {
+      return await callModel(MODELS[i], messages);
+    } catch (e: any) {
+      lastErr = e;
+      continue;
     }
-
-    if (modelIndex < MODELS.length - 1) {
-      console.warn(`Model ${model} failed, falling back to ${MODELS[modelIndex + 1]}`);
-      return callWithRetry(messages, modelIndex + 1, 0);
-    }
-
-    throw e;
   }
+  throw lastErr;
 }
 
 function extractJson(text: string): any {
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```json\s*/i, "").replace(/^```\s*/i, "");
   cleaned = cleaned.replace(/```\s*$/i, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start !== -1 && end !== -1) cleaned = cleaned.slice(start, end + 1);
+  const s = cleaned.indexOf("{");
+  const e = cleaned.lastIndexOf("}");
+  if (s !== -1 && e !== -1) cleaned = cleaned.slice(s, e + 1);
   return JSON.parse(cleaned);
 }
 
-function clampRegion(r: any): [number, number, number, number] {
-  if (!Array.isArray(r) || r.length !== 4) return [0, 0, 100, 100];
-  return r.map((n) => Math.max(0, Math.min(100, Number(n) || 0))) as any;
+function salvageJson(text: string): any {
+  const result: any = {
+    user_scores: {},
+    headline: "",
+    top_issues: [],
+    gaps_vs_leader: [],
+    recommended_tests: [],
+  };
+
+  const scoreKeys = [
+    "brand_recognition",
+    "category_clarity",
+    "flavor_clarity",
+    "benefit_clarity",
+    "shelf_visibility",
+    "digital_shelf_readability",
+    "differentiation",
+    "sku_confusion_risk",
+  ];
+  for (const k of scoreKeys) {
+    const m = text.match(new RegExp(`"${k}"\\s*:\\s*(\\d+(?:\\.\\d+)?)`));
+    if (m) result.user_scores[k] = Number(m[1]);
+  }
+
+  const h = text.match(/"headline"\s*:\s*"([^"]*)"/);
+  if (h) result.headline = h[1];
+
+  const issueMatches = text.matchAll(
+    /"issue"\s*:\s*"([^"]*)"[^}]*?"region"\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]/g
+  );
+  for (const m of issueMatches) {
+    result.top_issues.push({
+      issue: m[1],
+      region: [Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])],
+    });
+  }
+
+  const gapsMatch = text.match(/"gaps_vs_leader"\s*:\s*\[([^\]]*)\]/);
+  if (gapsMatch) {
+    const items = gapsMatch[1].matchAll(/"([^"]*)"/g);
+    for (const m of items) result.gaps_vs_leader.push(m[1]);
+  }
+
+  const testsMatch = text.match(/"recommended_tests"\s*:\s*\[([^\]]*)\]/);
+  if (testsMatch) {
+    const items = testsMatch[1].matchAll(/"([^"]*)"/g);
+    for (const m of items) result.recommended_tests.push(m[1]);
+  }
+
+  return result;
 }
 
-function normalize(raw: any, category: string) {
-  const score = (v: any) =>
-    typeof v === "object" && v !== null
-      ? { score: Number(v.score) || 0, notes: String(v.notes || "") }
-      : { score: Number(v) || 0, notes: "" };
+function parseOrSalvage(text: string): any {
+  try {
+    return extractJson(text);
+  } catch (e) {
+    console.warn("JSON parse failed — salvaging");
+    return salvageJson(text);
+  }
+}
 
-  const issues = (raw.top_issues || raw.topIssues || []).slice(0, 3).map((i: any) => {
-    if (typeof i === "string") return { issue: i, region: [0, 0, 100, 100] };
-    return {
-      issue: String(i.issue || i.text || ""),
-      region: clampRegion(i.region),
-    };
-  });
+function clampRegion(r: any): number[] {
+  if (!Array.isArray(r) || r.length !== 4) return [0, 0, 100, 100];
+  return r.map((n) => Math.max(0, Math.min(100, Number(n) || 0)));
+}
 
-  return {
-    category,
-    first_impression: {
-      summary:
-        raw.first_impression?.summary ||
-        raw.firstImpression?.summary ||
-        raw.summary ||
-        "Analysis complete.",
-      attention_order:
-        raw.first_impression?.attention_order ||
-        raw.firstImpression?.attentionOrder ||
-        raw.attention_order ||
-        [],
-    },
-    brand_recognition: score(raw.brand_recognition || raw.brandRecognition),
-    category_clarity: score(raw.category_clarity || raw.categoryClarity),
-    flavor_clarity: score(raw.flavor_clarity || raw.flavorClarity),
-    benefit_clarity: score(raw.benefit_clarity || raw.benefitClarity),
-    shelf_visibility: score(raw.shelf_visibility || raw.shelfVisibility),
-    digital_shelf_readability: score(
-      raw.digital_shelf_readability || raw.digitalShelfReadability
-    ),
-    differentiation: score(raw.differentiation),
-    sku_confusion_risk: score(raw.sku_confusion_risk || raw.skuConfusionRisk),
-    top_issues: issues,
-    competitor_reference: raw.competitor_reference || raw.competitorReference || null,
-    recommended_tests: raw.recommended_tests || raw.recommendedTests || [],
-  };
+function trim(s: any, max: number): string {
+  const str = String(s || "").trim();
+  const w = str.split(/\s+/);
+  return w.length <= max ? str : w.slice(0, max).join(" ") + "…";
+}
+
+function clampScore(n: any) {
+  return Math.max(0, Math.min(100, Number(n) || 0));
 }
 
 export async function POST(req: Request) {
   try {
     const form = await req.formData();
-    const file = form.get("image") as File;
-    const category = (form.get("category") as string) || "beverage";
+    const category = (form.get("category") as string) || "functional_soda";
+    const yourCan = form.get("your_can") as File;
+    const competitorNames = form.getAll("competitor_names") as string[];
 
-    if (!file) return NextResponse.json({ error: "No image" }, { status: 400 });
+    if (!yourCan) return NextResponse.json({ error: "No can uploaded" }, { status: 400 });
+    if (competitorNames.length < 2)
+      return NextResponse.json({ error: "Pick at least 2 competitors" }, { status: 400 });
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const b64 = buffer.toString("base64");
+    const cached = competitorNames
+      .map((name) => {
+        const s = COMPETITOR_SCORES[name];
+        if (!s) return null;
+        return { name, scores: s, overall: avgScore(s), domain: COMPETITOR_DOMAINS[name] || "" };
+      })
+      .filter(Boolean) as { name: string; scores: any; overall: number; domain: string }[];
+
+    if (cached.length < 2) {
+      return NextResponse.json({ error: "Some competitors are not recognised." }, { status: 400 });
+    }
+
+    const competitorBlock = cached
+      .map((c) => `${c.name} (${c.overall}): ${JSON.stringify(c.scores)}`)
+      .join("\n");
+
+    const content: any[] = [
+      {
+        type: "text",
+        text: `Category: ${category}
+
+Pre-computed competitor scores (use as given):
+${competitorBlock}
+
+Score the USER's can in the image. For each issue, give a specific region
+of the image where the problem is visible.
+
+Return JSON.`,
+      },
+      { type: "text", text: `IMAGE — USER'S CAN:` },
+    ];
+
+    const buf = Buffer.from(await yourCan.arrayBuffer());
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: `data:${yourCan.type || "image/jpeg"};base64,${buf.toString("base64")}`,
+      },
+    });
 
     const messages = [
       { role: "system", content: SYSTEM },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: `Analyze this ${category} beverage packaging.` },
-          {
-            type: "image_url",
-            image_url: { url: `data:${file.type};base64,${b64}` },
-          },
-        ],
-      },
+      { role: "user", content },
     ];
 
-    const rawText = await callWithRetry(messages);
-    const parsed = extractJson(rawText);
-    const normalized = normalize(parsed, category);
+    const rawText = await callWithFallback(messages);
+    const parsed = parseOrSalvage(rawText);
 
-    return NextResponse.json(normalized);
-  } catch (e: any) {
-    console.error("=== ANALYZE ERROR ===", e);
-    return NextResponse.json(
-      { error: e.message || "Analysis failed" },
-      { status: 500 }
+    const us = parsed.user_scores || {};
+    const userScores = {
+      brand_recognition: { score: clampScore(us.brand_recognition), notes: "" },
+      category_clarity: { score: clampScore(us.category_clarity), notes: "" },
+      flavor_clarity: { score: clampScore(us.flavor_clarity), notes: "" },
+      benefit_clarity: { score: clampScore(us.benefit_clarity), notes: "" },
+      shelf_visibility: { score: clampScore(us.shelf_visibility), notes: "" },
+      digital_shelf_readability: { score: clampScore(us.digital_shelf_readability), notes: "" },
+      differentiation: { score: clampScore(us.differentiation), notes: "" },
+      sku_confusion_risk: { score: clampScore(us.sku_confusion_risk), notes: "" },
+    };
+    const userOverall = Math.round(
+      (userScores.brand_recognition.score +
+        userScores.category_clarity.score +
+        userScores.flavor_clarity.score +
+        userScores.benefit_clarity.score +
+        userScores.shelf_visibility.score +
+        userScores.digital_shelf_readability.score +
+        userScores.differentiation.score +
+        userScores.sku_confusion_risk.score) /
+        8
     );
+
+    type Row = { name: string; is_user: boolean; score: number; scores: any };
+    const rows: Row[] = [
+      { name: "Your can", is_user: true, score: userOverall, scores: userScores },
+      ...cached.map((c) => ({
+        name: c.name,
+        is_user: false,
+        score: c.overall,
+        scores: Object.fromEntries(
+          Object.entries(c.scores).map(([k, v]) => [k, { score: clampScore(v), notes: "" }])
+        ) as any,
+      })),
+    ];
+
+    rows.sort((a, b) => b.score - a.score);
+    const leaderboard = rows.map((r, i) => ({ ...r, rank: i + 1 }));
+
+    const userRow = leaderboard.find((r) => r.is_user)!;
+    const leaderRow = leaderboard[0];
+    const topCompetitor = cached.reduce(
+      (best, c) => (c.overall > best.overall ? c : best),
+      cached[0]
+    );
+
+    const issues = (parsed.top_issues || []).slice(0, 3).map((i: any) =>
+      typeof i === "string"
+        ? { issue: trim(i, 12), region: [0, 0, 100, 100] }
+        : { issue: trim(i.issue || "", 12), region: clampRegion(i.region) }
+    );
+    const gaps = (parsed.gaps_vs_leader || []).slice(0, 3).map((g: any) => trim(g, 12));
+    const tests = (parsed.recommended_tests || []).slice(0, 3).map((t: any) => trim(t, 10));
+
+    const response = {
+      category,
+      first_impression: {
+        headline: trim(parsed.headline || "Analysis complete.", 12),
+        summary: "",
+        attention_order: [],
+      },
+      user_rank: userRow.rank,
+      user_score: userRow.score,
+      leader_name: leaderRow.name,
+      leader_score: leaderRow.score,
+      leaderboard,
+      top_issues: issues,
+      gaps_vs_leader: gaps,
+      competitor_reference: {
+        brand: topCompetitor.name,
+        domain: topCompetitor.domain,
+        what_they_do_differently: "",
+        what_to_copy: "",
+      },
+      recommended_tests: tests,
+    };
+
+    return NextResponse.json(response);
+  } catch (e: any) {
+    console.error("ANALYZE ERROR:", e);
+    return NextResponse.json({ error: e.message || "Analysis failed" }, { status: 500 });
   }
 }
